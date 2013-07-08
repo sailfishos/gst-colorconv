@@ -33,6 +33,8 @@ GST_DEBUG_CATEGORY_STATIC (colorconv_debug);
 
 #define IS_NATIVE_CAPS(x) (strcmp(gst_structure_get_name (gst_caps_get_structure (x, 0)), GST_NATIVE_BUFFER_NAME) == 0)
 
+#define BACKEND "/usr/lib/gstcolorconv/libgstcolorconvqcom.so"
+
 GST_BOILERPLATE_FULL (GstColorConv, gst_color_conv, GstBaseTransform,
     GST_TYPE_BASE_TRANSFORM, gst_color_conv_debug_init);
 
@@ -115,11 +117,16 @@ gst_color_conv_init (GstColorConv * conv, GstColorConvClass * gclass)
   gst_base_transform_set_in_place (trans, FALSE);
 
   GST_BASE_TRANSFORM_CLASS (gclass)->passthrough_on_same_caps = FALSE;
+
+  conv->backend = NULL;
+  conv->mod = NULL;
 }
 
 static void
 gst_color_conv_finalize (GObject * object)
 {
+  // TODO:
+
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
 
@@ -174,9 +181,44 @@ gst_color_conv_set_caps (GstBaseTransform * trans,
 static gboolean
 gst_color_conv_start (GstBaseTransform * trans)
 {
-  GST_DEBUG_OBJECT (trans, "start");
+  GstColorConv *conv = GST_COLOR_CONV (trans);
 
-  // TODO:
+  GST_DEBUG_OBJECT (conv, "start");
+
+  if (!conv->mod) {
+    conv->mod =
+        g_module_open (BACKEND, G_MODULE_BIND_LAZY | G_MODULE_BIND_LOCAL);
+  }
+
+  if (!conv->mod) {
+    GST_ELEMENT_ERROR (conv, LIBRARY, INIT,
+        ("Failed to load conversion backend: %s", g_module_error ()), (NULL));
+    return FALSE;
+  }
+
+  if (!conv->backend) {
+    _gst_color_conv_backend_get sym;
+
+    if (!g_module_symbol (conv->mod, BACKEND_SYMBOL_NAME, (gpointer *) & sym)) {
+      GST_ELEMENT_ERROR (conv, LIBRARY, INIT, ("Invalid conversion backend: %s",
+              g_module_error ()), (NULL));
+      return FALSE;
+    }
+
+    conv->backend = g_malloc (sizeof (GstColorConvBackend));
+
+    if (!sym (conv->backend)) {
+      GST_ELEMENT_ERROR (conv, LIBRARY, INIT,
+          ("Failed to initialize conversion backend"), (NULL));
+      return FALSE;
+    }
+  }
+
+  if (!conv->backend->start (conv->backend->handle)) {
+    GST_ELEMENT_ERROR (conv, LIBRARY, INIT,
+        ("Failed to start conversion backend"), (NULL));
+    return FALSE;
+  }
 
   return TRUE;
 }
@@ -184,9 +226,17 @@ gst_color_conv_start (GstBaseTransform * trans)
 static gboolean
 gst_color_conv_stop (GstBaseTransform * trans)
 {
-  GST_DEBUG_OBJECT (trans, "stop");
+  GstColorConv *conv = GST_COLOR_CONV (trans);
 
-  // TODO:
+  GST_DEBUG_OBJECT (conv, "stop");
+
+  if (conv->backend) {
+    if (!conv->backend->stop (conv->backend->handle)) {
+      GST_ELEMENT_ERROR (conv, LIBRARY, SHUTDOWN,
+          ("Failed to stop conversion backend"), (NULL));
+      return FALSE;
+    }
+  }
 
   return TRUE;
 }
@@ -239,9 +289,38 @@ static gboolean
 gst_color_conv_accept_caps (GstBaseTransform * trans,
     GstPadDirection direction, GstCaps * caps)
 {
-  GST_DEBUG_OBJECT (trans, "accept caps: direction %i, caps %" GST_PTR_FORMAT,
+  GstColorConv *conv = GST_COLOR_CONV (trans);
+
+  GST_DEBUG_OBJECT (conv, "accept caps: direction %i, caps %" GST_PTR_FORMAT,
       direction, caps);
-  // TODO:
+
+  if (IS_NATIVE_CAPS (caps)) {
+    int format;
+    int hal_format = conv->backend->get_hal_format (conv->backend->handle);
+    if (gst_structure_get_int (gst_caps_get_structure (caps, 0), "format",
+            &format)) {
+      GST_WARNING_OBJECT (trans, "failed to get format");
+      return FALSE;
+    }
+
+    if (format != hal_format) {
+      GST_WARNING_OBJECT (trans,
+          "backend format (0x%x) is not similar to caps format (0x%x)",
+          hal_format, format);
+      return FALSE;
+    }
+  } else {
+    GstVideoFormat fmt;
+    if (!gst_video_format_parse_caps (caps, &fmt, NULL, NULL)) {
+      GST_WARNING_OBJECT (trans, "failed to parse caps %" GST_PTR_FORMAT, caps);
+      return FALSE;
+    }
+
+    if (fmt != GST_VIDEO_FORMAT_I420) {
+      GST_WARNING_OBJECT (trans, "Only I420 is supported");
+      return FALSE;
+    }
+  }
 
   return TRUE;
 }

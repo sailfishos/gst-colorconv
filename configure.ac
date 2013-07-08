@@ -50,6 +50,17 @@ PKG_CHECK_MODULES(DROID, [
   ])
 ])
 
+PKG_CHECK_MODULES(GMODULE, [
+  gmodule-2.0
+], [
+  AC_SUBST(GMODULE_CFLAGS)
+  AC_SUBST(GMODULE_LIBS)
+], [
+  AC_MSG_ERROR([
+      gmodule-2.0 package is missing
+  ])
+])
+
 dnl check if compiler understands -Wall (if yes, add -Wall to GST_CFLAGS)
 AC_MSG_CHECKING([to see if compiler understands -Wall])
 save_CFLAGS="$CFLAGS"
@@ -69,6 +80,10 @@ else
 fi
 AC_SUBST(plugindir)
 
+dnl set backenddir
+backenddir="\$(libdir)/gstcolorconv/"
+AC_SUBST(backenddir)
+
 dnl set proper LDFLAGS for plugins
 GST_PLUGIN_LDFLAGS='-module -avoid-version -export-symbols-regex [_]*\(gst_\|Gst\|GST_\).*'
 AC_SUBST(GST_PLUGIN_LDFLAGS)
@@ -76,6 +91,8 @@ AC_SUBST(GST_PLUGIN_LDFLAGS)
 AC_CHECK_LIB(hybris-common, android_dlopen, [], AC_MSG_ERROR([libhybris not found]))
 
 AC_CONFIG_FILES([Makefile
+		backends/Makefile
+		backends/qcom/Makefile
 		gst/Makefile
 		gst/colorconv/Makefile
 		])

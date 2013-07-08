@@ -22,6 +22,8 @@
 
 #include <gst/gst.h>
 #include <gst/base/gstbasetransform.h>
+#include "gstcolorconvbackend.h"
+#include <gmodule.h>
 
 G_BEGIN_DECLS
 
@@ -43,6 +45,9 @@ typedef struct _GstColorConvClass GstColorConvClass;
 
 struct _GstColorConv {
   GstBaseTransform parent;
+
+  GstColorConvBackend *backend;
+  GModule *mod;
 };
 
 struct _GstColorConvClass {

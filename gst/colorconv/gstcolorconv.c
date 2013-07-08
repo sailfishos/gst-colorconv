@@ -32,8 +32,10 @@ GST_DEBUG_CATEGORY_STATIC (colorconv_debug);
   GST_DEBUG_CATEGORY_INIT (colorconv_debug, "colorconv", 0, "colorconv element"); \
 
 #define IS_NATIVE_CAPS(x) (strcmp(gst_structure_get_name (gst_caps_get_structure (x, 0)), GST_NATIVE_BUFFER_NAME) == 0)
+#define IS_NATIVE_STRUCTURE(x) (strcmp(gst_structure_get_name (x), GST_NATIVE_BUFFER_NAME) == 0)
 
 #define BACKEND "/usr/lib/gstcolorconv/libgstcolorconvqcom.so"
+#define BUFFER_LOCK_USAGE GRALLOC_USAGE_SW_READ_RARELY | GRALLOC_USAGE_SW_WRITE_OFTEN
 
 GST_BOILERPLATE_FULL (GstColorConv, gst_color_conv, GstBaseTransform,
     GST_TYPE_BASE_TRANSFORM, gst_color_conv_debug_init);
@@ -67,12 +69,14 @@ static GstFlowReturn gst_color_conv_transform (GstBaseTransform * trans,
     GstBuffer * inbuf, GstBuffer * outbuf);
 static GstFlowReturn gst_color_conv_prepare_output_buffer (GstBaseTransform *
     trans, GstBuffer * input, gint size, GstCaps * caps, GstBuffer ** buf);
-static void gst_color_conv_before_transform (GstBaseTransform * trans,
-    GstBuffer * buffer);
 static gboolean gst_color_conv_accept_caps (GstBaseTransform * trans,
     GstPadDirection direction, GstCaps * caps);
 static void gst_color_conv_fixate_caps (GstBaseTransform * trans,
     GstPadDirection direction, GstCaps * caps, GstCaps * othercaps);
+static void *gst_color_conv_get_buffer_data (GstBuffer * buffer,
+    gboolean * locked);
+static gboolean gst_color_conv_unlock_buffer (GstBuffer * buffer,
+    gboolean locked);
 
 static void
 gst_color_conv_base_init (gpointer gclass)
@@ -105,8 +109,6 @@ gst_color_conv_class_init (GstColorConvClass * klass)
   trans_class->transform = GST_DEBUG_FUNCPTR (gst_color_conv_transform);
   trans_class->prepare_output_buffer =
       GST_DEBUG_FUNCPTR (gst_color_conv_prepare_output_buffer);
-  trans_class->before_transform =
-      GST_DEBUG_FUNCPTR (gst_color_conv_before_transform);
   trans_class->accept_caps = GST_DEBUG_FUNCPTR (gst_color_conv_accept_caps);
   trans_class->fixate_caps = GST_DEBUG_FUNCPTR (gst_color_conv_fixate_caps);
 }
@@ -128,7 +130,24 @@ gst_color_conv_init (GstColorConv * conv, GstColorConvClass * gclass)
 static void
 gst_color_conv_finalize (GObject * object)
 {
-  // TODO:
+  GstColorConv *conv = GST_COLOR_CONV (object);
+
+  GST_DEBUG_OBJECT (conv, "finalize");
+
+  if (conv->backend) {
+    conv->backend->destroy (conv->backend->handle);
+    g_free (conv->backend);
+    conv->backend = NULL;
+  }
+
+  if (conv->mod) {
+    if (!g_module_close (conv->mod)) {
+      GST_WARNING_OBJECT (conv, "failed to unload backend %s",
+          g_module_error ());
+    }
+
+    conv->mod = NULL;
+  }
 
   G_OBJECT_CLASS (parent_class)->finalize (object);
 }
@@ -137,10 +156,36 @@ static GstCaps *
 gst_color_conv_transform_caps (GstBaseTransform * trans,
     GstPadDirection direction, GstCaps * caps)
 {
-  GST_DEBUG_OBJECT (trans, "transform caps %" GST_PTR_FORMAT, caps);
+  int x;
+  int len;
+  GstColorConv *conv = GST_COLOR_CONV (trans);
 
-  return
+  GST_DEBUG_OBJECT (conv, "transform caps %" GST_PTR_FORMAT, caps);
+
+  if (!conv->backend) {
+    GST_DEBUG_OBJECT (conv, "no backend loaded");
+
+    return
+        gst_caps_make_writable (gst_static_pad_template_get_caps
+        (&src_template));
+  }
+
+  GstCaps *out_caps =
       gst_caps_make_writable (gst_static_pad_template_get_caps (&src_template));
+
+  len = gst_caps_get_size (out_caps);
+
+  for (x = 0; x < len; x++) {
+    GstStructure *s = gst_caps_get_structure (out_caps, x);
+    if (IS_NATIVE_STRUCTURE (s)) {
+      gst_structure_set (s, "format", G_TYPE_INT,
+          conv->backend->get_hal_format (conv->backend->handle), NULL);
+    }
+  }
+
+  GST_LOG_OBJECT (conv, "returning caps %" GST_PTR_FORMAT, out_caps);
+
+  return out_caps;
 }
 
 static gboolean
@@ -175,6 +220,7 @@ gst_color_conv_set_caps (GstBaseTransform * trans,
   GST_DEBUG_OBJECT (trans, "set caps");
   GST_LOG_OBJECT (trans, "in %" GST_PTR_FORMAT, incaps);
   GST_LOG_OBJECT (trans, "out %" GST_PTR_FORMAT, outcaps);
+
 
   // TODO:
 
@@ -248,11 +294,92 @@ static GstFlowReturn
 gst_color_conv_transform (GstBaseTransform * trans,
     GstBuffer * inbuf, GstBuffer * outbuf)
 {
-  GST_DEBUG_OBJECT (trans, "transform");
+  void *in_data;
+  void *out_data;
+  gboolean in_locked;
+  gboolean out_locked;
+  int width;
+  int height;
+  GstStructure *s;
+  gboolean in_native;
+  gboolean out_native;
+  gboolean ret;
 
-  // TODO:
+  GstColorConv *conv = GST_COLOR_CONV (trans);
 
-  return GST_FLOW_ERROR;
+  GST_DEBUG_OBJECT (conv, "transform");
+
+  in_native = IS_NATIVE_CAPS (inbuf->caps);
+  out_native = IS_NATIVE_CAPS (outbuf->caps);
+
+  if (in_native == out_native) {
+    return GST_FLOW_OK;
+  }
+
+  /* lock */
+  in_data = gst_color_conv_get_buffer_data (inbuf, &in_locked);
+  if (!in_data) {
+    GST_ELEMENT_ERROR (conv, LIBRARY, FAILED,
+        ("Could not lock native buffer handle"), (NULL));
+    return GST_FLOW_ERROR;
+  }
+
+  out_data = gst_color_conv_get_buffer_data (outbuf, &out_locked);
+  if (!out_data) {
+    gst_color_conv_unlock_buffer (inbuf, in_locked);
+
+    GST_ELEMENT_ERROR (conv, LIBRARY, FAILED,
+        ("Could not lock native buffer handle"), (NULL));
+    return GST_FLOW_ERROR;
+  }
+
+  /* Convert */
+  s = gst_caps_get_structure (inbuf->caps, 0);
+
+  if (!gst_structure_get_int (s, "width", &width)) {
+    GST_ELEMENT_ERROR (conv, STREAM, FORMAT, ("failed to get width"), (NULL));
+    gst_color_conv_unlock_buffer (inbuf, in_locked);
+    gst_color_conv_unlock_buffer (outbuf, out_locked);
+
+    return GST_FLOW_ERROR;
+  }
+
+  if (!gst_structure_get_int (s, "height", &height)) {
+    GST_ELEMENT_ERROR (conv, STREAM, FORMAT, ("failed to get height"), (NULL));
+    gst_color_conv_unlock_buffer (inbuf, in_locked);
+    gst_color_conv_unlock_buffer (outbuf, out_locked);
+
+    return GST_FLOW_ERROR;
+  }
+
+  if (in_native) {
+    ret =
+        conv->backend->convert_from_native (conv->backend->handle, width,
+        height, in_data, out_data);
+  } else {
+    ret =
+        conv->backend->convert_to_native (conv->backend->handle, width, height,
+        in_data, out_data);
+  }
+
+  if (!ret) {
+    GST_ELEMENT_ERROR (conv, LIBRARY, ENCODE, ("failed to convert"), (NULL));
+    gst_color_conv_unlock_buffer (inbuf, in_locked);
+    gst_color_conv_unlock_buffer (outbuf, out_locked);
+
+    return GST_FLOW_ERROR;
+  }
+
+  /* unlock */
+  if (!gst_color_conv_unlock_buffer (inbuf, in_locked)) {
+    GST_WARNING_OBJECT (conv, "failed to unlock inbuf");
+  }
+
+  if (!gst_color_conv_unlock_buffer (outbuf, out_locked)) {
+    GST_WARNING_OBJECT (conv, "failed to unlock outbuf");
+  }
+
+  return GST_FLOW_OK;
 }
 
 static GstFlowReturn
@@ -268,24 +395,13 @@ gst_color_conv_prepare_output_buffer (GstBaseTransform *
   out_native = IS_NATIVE_CAPS (caps);
 
   if (in_native == out_native) {
+    /* We just ref the buffer because we will push it as it is. */
     *buf = gst_buffer_ref (input);
-  } else {
-
+  } else if (in_native) {
+    *buf = NULL;
   }
 
-  //    *buf = gst_color_conv_allocate_native_buffer ();
-
-  // TODO:
-
-  return GST_FLOW_ERROR;
-}
-
-static void
-gst_color_conv_before_transform (GstBaseTransform * trans, GstBuffer * buffer)
-{
-  GST_DEBUG_OBJECT (trans, "before transform");
-
-  // TODO:
+  return GST_FLOW_OK;
 }
 
 static gboolean
@@ -359,7 +475,73 @@ gst_color_conv_fixate_caps (GstBaseTransform * trans,
   if (gst_structure_get_fraction (in, "framerate", &fps_n, &fps_d)) {
     gst_structure_set (out, "framerate", GST_TYPE_FRACTION, fps_n, fps_d, NULL);
   }
-  // TODO: What to do with format?
 
   GST_LOG_OBJECT (trans, "caps after fixating %" GST_PTR_FORMAT, othercaps);
+}
+
+static void *
+gst_color_conv_get_buffer_data (GstBuffer * buffer, gboolean * locked)
+{
+  GstNativeBuffer *native;
+  GstGralloc *gralloc;
+  int width;
+  int height;
+  buffer_handle_t *handle;
+  int err;
+  void *data;
+
+  if (!IS_NATIVE_CAPS (buffer->caps)) {
+    *locked = FALSE;
+    return GST_BUFFER_DATA (buffer);
+  }
+
+  native = GST_NATIVE_BUFFER (buffer);
+  *locked = gst_native_buffer_is_locked (native);
+  if (*locked) {
+    return GST_BUFFER_DATA (buffer);
+  }
+
+  *locked = FALSE;
+  gralloc = gst_native_buffer_get_gralloc (native);
+  width = gst_native_buffer_get_width (native);
+  height = gst_native_buffer_get_height (native);
+  handle = gst_native_buffer_get_handle (native);
+
+  err = gralloc->gralloc->lock (gralloc->gralloc,
+      *handle, BUFFER_LOCK_USAGE, 0, 0, width, height, &data);
+
+  if (err != 0) {
+    return NULL;
+  }
+
+  return data;
+}
+
+static gboolean
+gst_color_conv_unlock_buffer (GstBuffer * buffer, gboolean locked)
+{
+  int err;
+  GstGralloc *gralloc;
+  buffer_handle_t *handle;
+  GstNativeBuffer *native;
+
+  if (!IS_NATIVE_CAPS (buffer->caps)) {
+    return TRUE;
+  }
+
+  if (locked) {
+    return TRUE;
+  }
+
+  native = GST_NATIVE_BUFFER (buffer);
+  gralloc = gst_native_buffer_get_gralloc (native);
+  handle = gst_native_buffer_get_handle (native);
+
+  err = gralloc->gralloc->unlock (gralloc->gralloc, *handle);
+
+  if (err != 0) {
+    return FALSE;
+  }
+
+  return TRUE;
 }

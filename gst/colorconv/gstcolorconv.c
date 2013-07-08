@@ -332,9 +332,34 @@ static void
 gst_color_conv_fixate_caps (GstBaseTransform * trans,
     GstPadDirection direction, GstCaps * caps, GstCaps * othercaps)
 {
+  GstStructure *in;
+  GstStructure *out;
+  int width;
+  int height;
+  int fps_n;
+  int fps_d;
+
   GST_DEBUG_OBJECT (trans, "fixate caps");
 
   GST_LOG_OBJECT (trans, "caps %" GST_PTR_FORMAT, caps);
   GST_LOG_OBJECT (trans, "othercaps %" GST_PTR_FORMAT, othercaps);
-  // TODO:
+
+  /* We care about width, height, format and framerate */
+  in = gst_caps_get_structure (caps, 0);
+  out = gst_caps_get_structure (othercaps, 0);
+
+  if (gst_structure_get_int (in, "width", &width)) {
+    gst_structure_set (out, "width", G_TYPE_INT, width, NULL);
+  }
+
+  if (gst_structure_get_int (in, "height", &height)) {
+    gst_structure_set (out, "height", G_TYPE_INT, height, NULL);
+  }
+
+  if (gst_structure_get_fraction (in, "framerate", &fps_n, &fps_d)) {
+    gst_structure_set (out, "framerate", GST_TYPE_FRACTION, fps_n, fps_d, NULL);
+  }
+  // TODO: What to do with format?
+
+  GST_LOG_OBJECT (trans, "caps after fixating %" GST_PTR_FORMAT, othercaps);
 }

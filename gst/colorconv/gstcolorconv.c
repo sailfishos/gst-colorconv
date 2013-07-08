@@ -71,6 +71,8 @@ static void gst_color_conv_before_transform (GstBaseTransform * trans,
     GstBuffer * buffer);
 static gboolean gst_color_conv_accept_caps (GstBaseTransform * trans,
     GstPadDirection direction, GstCaps * caps);
+static void gst_color_conv_fixate_caps (GstBaseTransform * trans,
+    GstPadDirection direction, GstCaps * caps, GstCaps * othercaps);
 
 static void
 gst_color_conv_base_init (gpointer gclass)
@@ -106,6 +108,7 @@ gst_color_conv_class_init (GstColorConvClass * klass)
   trans_class->before_transform =
       GST_DEBUG_FUNCPTR (gst_color_conv_before_transform);
   trans_class->accept_caps = GST_DEBUG_FUNCPTR (gst_color_conv_accept_caps);
+  trans_class->fixate_caps = GST_DEBUG_FUNCPTR (gst_color_conv_fixate_caps);
 }
 
 static void
@@ -323,4 +326,15 @@ gst_color_conv_accept_caps (GstBaseTransform * trans,
   }
 
   return TRUE;
+}
+
+static void
+gst_color_conv_fixate_caps (GstBaseTransform * trans,
+    GstPadDirection direction, GstCaps * caps, GstCaps * othercaps)
+{
+  GST_DEBUG_OBJECT (trans, "fixate caps");
+
+  GST_LOG_OBJECT (trans, "caps %" GST_PTR_FORMAT, caps);
+  GST_LOG_OBJECT (trans, "othercaps %" GST_PTR_FORMAT, othercaps);
+  // TODO:
 }

@@ -66,11 +66,8 @@ qcom_stop (gpointer handle)
 static int
 qcom_get_hal_format (gpointer handle)
 {
-  /* TODO: double check this */
-  //  return 0x7FA30C03;
-  //  return 0x32315659;
-  //  0x32315659;
-  return 0x14;
+  /* HAL_PIXEL_FORMAT_NV12_ENCODEABLE */
+  return 0x102;
 }
 
 static void

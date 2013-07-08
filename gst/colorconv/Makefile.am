@@ -1,6 +1,7 @@
 plugin_LTLIBRARIES = libgstcolorconv.la
 
 libgstcolorconv_la_SOURCES = plugin.c \
+                             gstcolorconvbackend.h \
                              gstcolorconv.c \
                              gstcolorconv.h
 
@@ -14,4 +15,4 @@ libgstcolorconv_la_LIBADD = $(GST_LIBS) \
 libgstcolorconv_la_LDFLAGS = $(GST_PLUGIN_LDFLAGS)
 libgstcolorconv_la_LIBTOOLFLAGS = --tag=disable-static
 
-noinst_HEADERS = gstcolorconv.h
+noinst_HEADERS = gstcolorconv.h gstcolorconvbackend.h

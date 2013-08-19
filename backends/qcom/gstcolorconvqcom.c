@@ -67,7 +67,10 @@ static int
 qcom_get_hal_format (gpointer handle)
 {
   /* HAL_PIXEL_FORMAT_NV12_ENCODEABLE */
-  return 0x102;
+  /*  return 0x102; */
+
+  // TODO: hmmmmmmmmm
+  return 0x7FA30C03;
 }
 
 static void
@@ -77,7 +80,7 @@ qcom_destroy (gpointer handle)
 }
 
 gboolean
-qcom_convert_from_native (gpointer handle, int width, int height, void *in_data,
+qcom_convert (gpointer handle, int width, int height, void *in_data,
     void *out_data)
 {
   GstColorConvQcom *backend = (GstColorConvQcom *) handle;
@@ -95,29 +98,6 @@ qcom_convert_from_native (gpointer handle, int width, int height, void *in_data,
   return FALSE;
 }
 
-gboolean
-qcom_convert_to_native (gpointer handle, int width, int height, void *in_data,
-    void *out_data)
-{
-  GstColorConvQcom *backend = (GstColorConvQcom *) handle;
-  ARect rect;
-  int enc_width;
-  int enc_height;
-  int size;
-
-  if (backend->conv.getEncoderInputBufferInfo (width, height, &enc_width,
-          &enc_height, &rect, &size) != 0) {
-    return FALSE;
-  }
-
-  if (backend->conv.convertI420ToEncoderInput (in_data, width, height,
-          enc_width, enc_height, rect, out_data) == 0) {
-    return TRUE;
-  }
-
-  return FALSE;
-}
-
 G_MODULE_EXPORT gboolean
 gst_color_conv_backend_get (GstColorConvBackend * backend)
 {
@@ -126,8 +106,7 @@ gst_color_conv_backend_get (GstColorConvBackend * backend)
   backend->stop = qcom_stop;
   backend->get_hal_format = qcom_get_hal_format;
   backend->destroy = qcom_destroy;
-  backend->convert_from_native = qcom_convert_from_native;
-  backend->convert_to_native = qcom_convert_to_native;
+  backend->convert = qcom_convert;
 
   return TRUE;
 }

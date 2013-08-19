@@ -33,8 +33,7 @@ typedef struct {
   gboolean (* start) (gpointer handle);
   gboolean (* stop) (gpointer handle);
   void (* destroy) (gpointer handle);
-  gboolean (* convert_from_native) (gpointer handle, int width, int height, void *in_data, void *out_data);
-  gboolean (* convert_to_native) (gpointer handle, int width, int height, void *in_data, void *out_data);
+  gboolean (* convert) (gpointer handle, int width, int height, void *in_data, void *out_data);
 } GstColorConvBackend;
 
 typedef gboolean (* _gst_color_conv_backend_get) (GstColorConvBackend * backend);

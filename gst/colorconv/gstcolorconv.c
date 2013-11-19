@@ -471,6 +471,12 @@ gst_color_conv_accept_caps (GstBaseTransform * trans,
   GST_DEBUG_OBJECT (conv, "accept caps: direction %i, caps %" GST_PTR_FORMAT,
       direction, caps);
 
+  if (!conv->backend) {
+    if (!gst_color_conv_start (trans)) {
+      return FALSE;
+    }
+  }
+
   if (IS_NATIVE_CAPS (caps)) {
     int format;
     int hal_format = conv->backend->get_hal_format (conv->backend->handle);

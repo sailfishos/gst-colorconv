@@ -478,6 +478,8 @@ gst_color_conv_accept_caps (GstBaseTransform * trans,
   }
 
   if (IS_NATIVE_CAPS (caps)) {
+    GST_DEBUG_OBJECT (conv, "Cannot check format for native caps.");
+#if 0
     int format;
     int hal_format = conv->backend->get_hal_format (conv->backend->handle);
     if (gst_structure_get_int (gst_caps_get_structure (caps, 0), "format",
@@ -492,6 +494,7 @@ gst_color_conv_accept_caps (GstBaseTransform * trans,
           hal_format, format);
       return FALSE;
     }
+#endif
   } else {
     GstVideoFormat fmt;
     if (!gst_video_format_parse_caps (caps, &fmt, NULL, NULL)) {

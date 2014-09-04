@@ -66,11 +66,9 @@ qcom_stop (gpointer handle)
 static int
 qcom_get_hal_format (gpointer handle)
 {
-  /* HAL_PIXEL_FORMAT_NV12_ENCODEABLE */
-  /*  return 0x102; */
+  GstColorConvQcom *backend = (GstColorConvQcom *) handle;
 
-  // TODO: hmmmmmmmmm
-  return 0x7FA30C03;
+  return backend->conv.getDecoderOutputFormat();
 }
 
 static void

@@ -76,8 +76,6 @@ static void *gst_color_conv_get_buffer_data (GstColorConv * conv,
     GstBuffer * buffer, gboolean * was_locked);
 static gboolean gst_color_conv_unlock_buffer (GstColorConv * conv,
     GstBuffer * buffer, gboolean was_locked);
-static gboolean gst_color_conv_destroy_native_buffer (void *data,
-    GstNativeBuffer * buffer);
 
 static void
 gst_color_conv_base_init (gpointer gclass)
@@ -310,18 +308,13 @@ gst_color_conv_transform (GstBaseTransform * trans,
   void *in_data;
   void *out_data;
   gboolean in_locked;
-  gboolean out_locked;
   int width;
   int height;
   GstStructure *s;
-  gboolean out_native;
   gboolean ret;
-
   GstColorConv *conv = GST_COLOR_CONV (trans);
 
   GST_DEBUG_OBJECT (conv, "transform");
-
-  out_native = IS_NATIVE_CAPS (outbuf->caps);
 
   if (!GST_IS_NATIVE_BUFFER (inbuf)) {
     GST_ELEMENT_ERROR (conv, STREAM, FAILED,
@@ -329,13 +322,7 @@ gst_color_conv_transform (GstBaseTransform * trans,
     return GST_FLOW_ERROR;
   }
 
-  if (!GST_IS_NATIVE_BUFFER (outbuf)) {
-    GST_ELEMENT_ERROR (conv, STREAM, FAILED,
-        ("output buffer is not a native buffer"), (NULL));
-    return GST_FLOW_ERROR;
-  }
-
-  if (out_native) {
+  if (IS_NATIVE_CAPS (outbuf->caps)) {
     /* We are pushing the buffer as it is. */
     GST_DEBUG_OBJECT (conv, "shortcutting native buffer");
     return GST_FLOW_OK;
@@ -359,14 +346,7 @@ gst_color_conv_transform (GstBaseTransform * trans,
     return GST_FLOW_ERROR;
   }
 
-  out_data = gst_color_conv_get_buffer_data (conv, outbuf, &out_locked);
-  if (!out_data) {
-    gst_color_conv_unlock_buffer (conv, inbuf, in_locked);
-
-    GST_ELEMENT_ERROR (conv, LIBRARY, FAILED,
-        ("Could not lock native buffer handle"), (NULL));
-    return GST_FLOW_ERROR;
-  }
+  out_data = GST_BUFFER_DATA (outbuf);
 
   /* Convert */
   GST_LOG_OBJECT (conv, "sending buffer to backend for conversion");
@@ -377,10 +357,6 @@ gst_color_conv_transform (GstBaseTransform * trans,
   /* unlock */
   if (!gst_color_conv_unlock_buffer (conv, inbuf, in_locked)) {
     GST_WARNING_OBJECT (conv, "failed to unlock inbuf");
-  }
-
-  if (!gst_color_conv_unlock_buffer (conv, outbuf, out_locked)) {
-    GST_WARNING_OBJECT (conv, "failed to unlock outbuf");
   }
 
   if (!ret) {
@@ -396,66 +372,20 @@ static GstFlowReturn
 gst_color_conv_prepare_output_buffer (GstBaseTransform *
     trans, GstBuffer * input, gint size, GstCaps * caps, GstBuffer ** buf)
 {
-  gboolean out_native;
-  GstNativeBuffer *in;
-  GstNativeBuffer *out;
-  GstGralloc *gralloc;
-  int width;
-  int height;
-  int format;
-  int usage;
-  int stride;
-  buffer_handle_t handle;
-  GstVideoFormat fmt = GST_VIDEO_FORMAT_UNKNOWN;
-
   GST_DEBUG_OBJECT (trans, "prepare output buffer %" GST_PTR_FORMAT, caps);
 
-  out_native = IS_NATIVE_CAPS (caps);
-
-  if (out_native) {
+  if (IS_NATIVE_CAPS (caps)) {
     /* We just ref the buffer because we will push it as it is. */
     *buf = gst_buffer_ref (input);
     return GST_FLOW_OK;
   }
 
-  if (!gst_video_format_parse_caps (caps, &fmt, &width, &height)) {
-    GST_ELEMENT_ERROR (trans, STREAM, FORMAT, ("Failed to get video format"),
-        (NULL));
-    return FALSE;
-  }
-
-  /* We will have to allocate a new buffer */
-  in = GST_NATIVE_BUFFER (input);
-  gralloc = gst_native_buffer_get_gralloc (in);
-  width = gst_native_buffer_get_width (in);
-  height = gst_native_buffer_get_height (in);
-  format = gst_native_buffer_get_format (in);
-  usage = gst_native_buffer_get_usage (in);
-
-  handle =
-      gst_gralloc_allocate (gralloc, width, height, format, usage, &stride);
-  if (!handle) {
+  *buf = gst_buffer_new_and_alloc (size);
+  if (!*buf) {
     GST_ELEMENT_ERROR (trans, LIBRARY, FAILED,
-        ("Could not allocate native buffer handle"), (NULL));
+        ("Could not allocate buffer"), (NULL));
     return GST_FLOW_ERROR;
   }
-
-  out =
-      gst_native_buffer_new (handle, gralloc, width, height, stride, usage,
-      format);
-  gst_native_buffer_set_finalize_callback (out,
-      gst_color_conv_destroy_native_buffer, gst_object_ref (trans));
-
-  if (!gst_native_buffer_lock (out, fmt, BUFFER_LOCK_USAGE)) {
-    gst_buffer_unref (GST_BUFFER (out));
-
-    GST_ELEMENT_ERROR (trans, LIBRARY, FAILED,
-        ("Could not lock native buffer handle"), (NULL));
-    *buf = NULL;
-    return GST_FLOW_ERROR;
-  }
-
-  *buf = GST_BUFFER (out);
 
   gst_buffer_set_caps (*buf, caps);
 
@@ -656,19 +586,4 @@ gst_color_conv_unlock_buffer (GstColorConv * conv, GstBuffer * buffer,
   }
 
   return TRUE;
-}
-
-static gboolean
-gst_color_conv_destroy_native_buffer (void *data, GstNativeBuffer * buffer)
-{
-  GstColorConv *conv = (GstColorConv *) data;
-
-  GST_DEBUG_OBJECT (conv, "destroy native buffer");
-
-  gst_gralloc_free (gst_native_buffer_get_gralloc (buffer),
-      *gst_native_buffer_get_handle (buffer));
-
-  gst_object_unref (conv);
-
-  return FALSE;                 /* free buffer finally */
 }

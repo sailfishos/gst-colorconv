@@ -51,7 +51,10 @@ qcom_start (gpointer handle)
 
   init (&backend->conv);
 
-  backend->conv.openColorConverterLib ();
+  if (backend->conv.openColorConverterLib) {
+    backend->conv.openColorConverterLib ();
+  }
+
   handle = backend;
 
   return TRUE;

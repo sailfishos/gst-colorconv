@@ -63,6 +63,12 @@ qcom_start (gpointer handle)
 static gboolean
 qcom_stop (gpointer handle)
 {
+  GstColorConvQcom *backend = (GstColorConvQcom *) handle;
+
+  if (backend->conv.closeColorConverterLib) {
+    backend->conv.closeColorConverterLib ();
+  }
+
   return TRUE;
 }
 

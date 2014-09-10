@@ -76,6 +76,7 @@ static void *gst_color_conv_get_buffer_data (GstColorConv * conv,
     GstBuffer * buffer, gboolean * was_locked);
 static gboolean gst_color_conv_unlock_buffer (GstColorConv * conv,
     GstBuffer * buffer, gboolean was_locked);
+static void gst_color_conv_copy_buffer (GstBuffer * buff, guint8 *data, int width, int height);
 
 static void
 gst_color_conv_base_init (gpointer gclass)
@@ -312,6 +313,7 @@ gst_color_conv_transform (GstBaseTransform * trans,
   int height;
   GstStructure *s;
   gboolean ret;
+  gboolean copy_buffer;
   GstColorConv *conv = GST_COLOR_CONV (trans);
 
   GST_DEBUG_OBJECT (conv, "transform");
@@ -340,13 +342,28 @@ gst_color_conv_transform (GstBaseTransform * trans,
     return GST_FLOW_ERROR;
   }
 
-  /* lock */
-  in_data = gst_color_conv_get_buffer_data (conv, inbuf, &in_locked);
-  if (!in_data) {
+  copy_buffer = (width != GST_ROUND_UP_4 (width));
+  if (copy_buffer) {
+    GST_INFO_OBJECT (conv, "manually padding buffer width from %d to %d", width, GST_ROUND_UP_4 (width));
+    out_data = g_malloc (GST_BUFFER_SIZE (outbuf));
+  } else {
+    out_data = GST_BUFFER_DATA (outbuf);
+  }
+
+  if (!out_data) {
+    GST_ELEMENT_ERROR (conv, RESOURCE, NOT_FOUND, ("failed to allocate memory for output data"), (NULL));
     return GST_FLOW_ERROR;
   }
 
-  out_data = GST_BUFFER_DATA (outbuf);
+  /* lock */
+  in_data = gst_color_conv_get_buffer_data (conv, inbuf, &in_locked);
+  if (!in_data) {
+    if (copy_buffer) {
+      g_free (out_data);
+    }
+
+    return GST_FLOW_ERROR;
+  }
 
   /* Convert */
   GST_LOG_OBJECT (conv, "sending buffer to backend for conversion");
@@ -362,7 +379,16 @@ gst_color_conv_transform (GstBaseTransform * trans,
   if (!ret) {
     GST_ELEMENT_ERROR (conv, LIBRARY, ENCODE, ("failed to convert"), (NULL));
 
+    if (copy_buffer) {
+      g_free (out_data);
+    }
+
     return GST_FLOW_ERROR;
+  }
+
+  if (copy_buffer) {
+    gst_color_conv_copy_buffer (outbuf, out_data, width, height);
+    g_free (out_data);
   }
 
   return GST_FLOW_OK;
@@ -586,4 +612,31 @@ gst_color_conv_unlock_buffer (GstColorConv * conv, GstBuffer * buffer,
   }
 
   return TRUE;
+}
+
+static void
+gst_color_conv_copy_buffer (GstBuffer * buff, guint8 *data, int width, int height)
+{
+  int stride = GST_ROUND_UP_4 (width);
+  int strideUV = stride/2;
+  guint8 *p = data;
+  guint8 *dst = GST_BUFFER_DATA (buff);
+  int i;
+  int x;
+
+  /* Y */
+  for (i = height; i > 0; i--) {
+    memcpy(dst, p, width);
+    dst += stride;
+    p += width;
+  }
+
+  /* U and V */
+  for (x = 0; x < 2; x++) {
+    for (i = height / 2; i > 0; i--) {
+      memcpy(dst, p, width / 2);
+      dst += strideUV;
+      p += width/2;
+    }
+  }
 }
